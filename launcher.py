@@ -198,7 +198,20 @@ class Handler(http.server.BaseHTTPRequestHandler):
                 self._send(404, 'text/plain', b'No output yet - run the tool first.')
 
         else:
-            self._send(404, 'text/plain', b'Not found')
+            # Serve any file from the output folder using the path directly
+            rel = parsed.path.lstrip('/')
+            file_path = OUT / rel
+            if file_path.exists() and file_path.is_file():
+                ext = file_path.suffix.lower()
+                ctypes = {
+                    '.html': 'text/html', '.md': 'text/plain; charset=utf-8',
+                    '.json': 'application/json', '.js': 'application/javascript',
+                    '.css': 'text/css', '.bib': 'text/plain; charset=utf-8',
+                }
+                ctype = ctypes.get(ext, 'application/octet-stream')
+                self._send(200, ctype, file_path.read_bytes())
+            else:
+                self._send(404, 'text/plain', b'Not found')
 
     def _send(self, code, ctype, body):
         self.send_response(code)
