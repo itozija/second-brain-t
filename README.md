@@ -25,6 +25,90 @@ Point it at any folder and it gives you:
 - **Tiered context packs** — compressed summaries optimized for AI consumption
 - **Dashboard** — one place to access everything
 
+## Getting Started
+
+### Step 1 — Install Python
+
+Check if you already have it. Open a terminal and type:
+```bash
+python3 --version
+```
+
+If you see a version number — you're good. If not, download Python from [python.org](https://www.python.org/downloads/) and install it.
+
+> **How to open a terminal:**
+> - **Mac:** Press `Cmd + Space`, type `Terminal`, press Enter
+> - **Windows:** Press `Win + R`, type `cmd`, press Enter
+
+---
+
+### Step 2 — Install PDF support
+
+In your terminal, type:
+```bash
+pip3 install pdfplumber
+```
+
+This lets Second Brain T read PDF files automatically. Only needed once.
+
+---
+
+### Step 3 — Download Second Brain T
+
+```bash
+git clone https://github.com/itozija/second-brain-t
+cd second-brain-t
+```
+
+Or download the ZIP from GitHub and unzip it anywhere on your computer.
+
+---
+
+### Step 4 — Find your folder path
+
+Find the folder you want to analyze. To get its path:
+- **Mac:** Right-click the folder → Hold `Option` → Click "Copy as Pathname"
+- **Windows:** Hold `Shift` + Right-click the folder → "Copy as path"
+
+---
+
+### Step 5 — Run it
+
+In your terminal, navigate to where you downloaded Second Brain T:
+```bash
+cd /path/to/second-brain-t
+```
+
+Then run:
+```bash
+python3 build.py /path/to/your/folder
+```
+
+Replace `/path/to/your/folder` with the path you copied in Step 4.
+
+---
+
+### Step 6 — Open your knowledge base
+
+When it finishes, open this file in your browser:
+```
+second-brain-t/output/index.html
+```
+
+From there you can access the graph, wiki, and report.
+
+---
+
+### Optional — Browse the wiki in Obsidian
+
+1. Download [Obsidian](https://obsidian.md) (free)
+2. Open Obsidian → click **Open folder as vault**
+3. Select `second-brain-t/output/wiki`
+
+You'll get an interlinked wiki with a visual graph view.
+
+---
+
 ## How to use
 
 ```bash
