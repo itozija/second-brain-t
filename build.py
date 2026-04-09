@@ -221,6 +221,85 @@ def convert_pdfs(folder: Path) -> int:
     return converted
 
 
+# ── Word conversion ───────────────────────────────────────────────────────────
+
+def collect_docx(folder: Path) -> List[Path]:
+    files = []
+    for root, dirs, filenames in os.walk(folder):
+        dirs[:] = [d for d in dirs if d not in SKIP_DIRS]
+        for fname in filenames:
+            if fname.lower().endswith('.docx') and not fname.startswith('~$'):
+                files.append(Path(root) / fname)
+    return files
+
+def convert_docx(folder: Path) -> int:
+    try:
+        from docx import Document
+    except ImportError:
+        print('  python-docx not installed — skipping Word docs (pip3 install python-docx)')
+        return 0
+    converted = 0
+    for docx_path in collect_docx(folder):
+        md_path = docx_path.with_suffix('.md')
+        if md_path.exists():
+            continue
+        try:
+            doc = Document(str(docx_path))
+            paragraphs = [p.text for p in doc.paragraphs if p.text.strip()]
+            if paragraphs:
+                content = (f'---\ntitle: "{docx_path.stem}"\nsource: "{docx_path.name}"\n---\n\n'
+                           f'# {docx_path.stem}\n\n' + '\n\n'.join(paragraphs))
+                md_path.write_text(content, encoding='utf-8')
+                converted += 1
+                print(f'  DOCX → {md_path.name}')
+        except Exception as e:
+            print(f'  DOCX error {docx_path.name}: {e}')
+    return converted
+
+
+# ── PowerPoint conversion ─────────────────────────────────────────────────────
+
+def collect_pptx(folder: Path) -> List[Path]:
+    files = []
+    for root, dirs, filenames in os.walk(folder):
+        dirs[:] = [d for d in dirs if d not in SKIP_DIRS]
+        for fname in filenames:
+            if fname.lower().endswith('.pptx') and not fname.startswith('~$'):
+                files.append(Path(root) / fname)
+    return files
+
+def convert_pptx(folder: Path) -> int:
+    try:
+        from pptx import Presentation
+    except ImportError:
+        print('  python-pptx not installed — skipping PowerPoint files (pip3 install python-pptx)')
+        return 0
+    converted = 0
+    for pptx_path in collect_pptx(folder):
+        md_path = pptx_path.with_suffix('.md')
+        if md_path.exists():
+            continue
+        try:
+            prs = Presentation(str(pptx_path))
+            slides = []
+            for i, slide in enumerate(prs.slides, 1):
+                texts = []
+                for shape in slide.shapes:
+                    if hasattr(shape, 'text') and shape.text.strip():
+                        texts.append(shape.text.strip())
+                if texts:
+                    slides.append(f'<!-- Slide {i} -->\n' + '\n'.join(texts))
+            if slides:
+                content = (f'---\ntitle: "{pptx_path.stem}"\nsource: "{pptx_path.name}"\n---\n\n'
+                           f'# {pptx_path.stem}\n\n' + '\n\n---\n\n'.join(slides))
+                md_path.write_text(content, encoding='utf-8')
+                converted += 1
+                print(f'  PPTX → {md_path.name}')
+        except Exception as e:
+            print(f'  PPTX error {pptx_path.name}: {e}')
+    return converted
+
+
 # ── SHA256 Cache ──────────────────────────────────────────────────────────────
 
 class Cache:
@@ -872,11 +951,14 @@ def main():
     print(f'  Source : {target}')
     print(f'  Output : {OUT}\n')
 
-    # Always auto-convert PDFs
+    # Always auto-convert PDFs, Word docs, and PowerPoint files
     pdfs = collect_pdfs(target)
-    if pdfs:
-        print(f'Found {len(pdfs)} PDFs — converting...')
-        n = convert_pdfs(target)
+    docx_files = collect_docx(target)
+    pptx_files = collect_pptx(target)
+    if pdfs or docx_files or pptx_files:
+        total = len(pdfs) + len(docx_files) + len(pptx_files)
+        print(f'Found {total} document(s) to convert (PDF:{len(pdfs)} DOCX:{len(docx_files)} PPTX:{len(pptx_files)})...')
+        n = convert_pdfs(target) + convert_docx(target) + convert_pptx(target)
         print(f'  {n} converted\n')
 
     files = collect_files(target)

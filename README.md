@@ -74,14 +74,14 @@ If you see a version number — you're good. If not, download Python from [pytho
 
 ---
 
-### Step 2 — Install PDF support
+### Step 2 — Install document support
 
 In your terminal, type:
 ```bash
-pip3 install pdfplumber
+pip3 install pdfplumber python-docx python-pptx
 ```
 
-This lets Second Brain T read PDF files automatically. Only needed once.
+This lets Second Brain T read PDF, Word (.docx), and PowerPoint (.pptx) files automatically. Only needed once.
 
 ---
 
@@ -235,6 +235,8 @@ Run it on a project folder with meeting notes, reports, and docs. Ask:
 ## Works on
 
 - Research papers (PDFs auto-converted)
+- Word documents (.docx auto-converted)
+- PowerPoint presentations (.pptx auto-converted)
 - Markdown notes
 - Code projects (Python + TypeScript AST parsing)
 - Any mix of the above
@@ -242,7 +244,7 @@ Run it on a project folder with meeting notes, reports, and docs. Ask:
 ## Requirements
 
 - Python 3.8+
-- `pip3 install pdfplumber` — only if you want PDF support
+- `pip3 install pdfplumber python-docx python-pptx` — for PDF, Word, and PowerPoint support
 
 No other dependencies. Everything runs locally.
 
