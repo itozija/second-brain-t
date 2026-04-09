@@ -1,194 +1,224 @@
 #!/usr/bin/env python3
 """
-Second Brain T — GUI Launcher
-Double-click this file to open the launcher window.
-No terminal needed.
+Second Brain T — Web Launcher
+Double-click or run: python3 launcher.py
+Opens in your browser — no installation needed.
 """
 
-import tkinter as tk
-from tkinter import filedialog, ttk, messagebox
-import subprocess
+import http.server
 import threading
+import webbrowser
+import subprocess
+import json
 import sys
 import os
 from pathlib import Path
 
+PORT = 7432
 SCRIPT = Path(__file__).parent / 'build.py'
-BG = '#0d1117'
-FG = '#e6edf3'
-ACCENT = '#388bfd'
-CARD = '#161b22'
-BORDER = '#30363d'
-MUTED = '#8b949e'
-GREEN = '#3fb950'
-RED = '#f85149'
+OUT = Path(__file__).parent / 'output'
+
+HTML = """<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<title>Second Brain T</title>
+<style>
+* { box-sizing: border-box; margin: 0; padding: 0; }
+body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+       background: #0d1117; color: #e6edf3; min-height: 100vh;
+       display: flex; align-items: center; justify-content: center; }
+.card { background: #161b22; border: 1px solid #30363d; border-radius: 14px;
+        padding: 40px; width: 480px; }
+h1 { font-size: 24px; font-weight: 700; text-align: center; margin-bottom: 6px; }
+.sub { text-align: center; color: #8b949e; font-size: 13px; margin-bottom: 32px; }
+label { font-size: 12px; color: #8b949e; display: block; margin-bottom: 6px; font-weight: 500; }
+.row { margin-bottom: 18px; }
+.input-row { display: flex; gap: 10px; }
+input[type=text] { flex: 1; padding: 10px 14px; background: #21262d;
+                   border: 1px solid #30363d; border-radius: 8px;
+                   color: #e6edf3; font-size: 14px; outline: none; }
+input[type=text]:focus { border-color: #388bfd; }
+input[type=text]::placeholder { color: #484f58; }
+.btn { padding: 10px 18px; border-radius: 8px; font-size: 13px;
+       font-weight: 600; cursor: pointer; border: none; transition: opacity .15s; }
+.btn:hover { opacity: .85; }
+.btn-pick { background: #21262d; color: #e6edf3; border: 1px solid #30363d; }
+.btn-run { background: #388bfd; color: white; width: 100%; padding: 13px;
+           font-size: 15px; margin-top: 6px; }
+.btn-run:disabled { opacity: .5; cursor: not-allowed; }
+.check-row { display: flex; align-items: center; gap: 8px; font-size: 13px; color: #c9d1d9; }
+input[type=checkbox] { accent-color: #388bfd; width: 15px; height: 15px; }
+#log { background: #010409; border-radius: 8px; padding: 14px;
+       font-family: 'Menlo', monospace; font-size: 12px; height: 160px;
+       overflow-y: auto; margin-top: 20px; display: none; }
+.log-line { margin: 2px 0; }
+.ok  { color: #3fb950; }
+.err { color: #f85149; }
+.inf { color: #388bfd; }
+.dim { color: #8b949e; }
+#open-btn { display: none; background: #3fb950; color: white; width: 100%;
+            padding: 12px; border-radius: 8px; font-size: 14px; font-weight: 600;
+            cursor: pointer; border: none; margin-top: 10px; }
+</style>
+</head>
+<body>
+<div class="card">
+  <h1>🧠 Second Brain T</h1>
+  <p class="sub">Turn any folder into a knowledge base</p>
+
+  <div class="row">
+    <label>Folder</label>
+    <div class="input-row">
+      <input type="text" id="folder" placeholder="Paste your folder path here..." />
+    </div>
+  </div>
+
+  <div class="row">
+    <label>Title <span style="color:#484f58">(optional)</span></label>
+    <input type="text" id="title" placeholder="e.g. My Research" style="width:100%" />
+  </div>
+
+  <div class="row">
+    <div class="check-row" style="margin-bottom:8px">
+      <input type="checkbox" id="cache" checked />
+      <span>Use cache — skip files that haven't changed (faster)</span>
+    </div>
+    <div class="check-row">
+      <input type="checkbox" id="clear" />
+      <span>Clear previous output and start fresh</span>
+    </div>
+  </div>
+
+  <button class="btn btn-run" id="run-btn" onclick="run()">▶ Run</button>
+  <div id="log"></div>
+  <button id="open-btn" onclick="openDash()">Open Dashboard →</button>
+</div>
+
+<script>
+async function run() {
+  const folder = document.getElementById('folder').value.trim();
+  if (!folder) { alert('Please enter a folder path first.'); return; }
+
+  const btn = document.getElementById('run-btn');
+  btn.disabled = true; btn.textContent = 'Running...';
+  document.getElementById('open-btn').style.display = 'none';
+
+  const log = document.getElementById('log');
+  log.style.display = 'block'; log.innerHTML = '';
+
+  const params = new URLSearchParams({
+    folder,
+    title: document.getElementById('title').value.trim(),
+    cache: document.getElementById('cache').checked ? '1' : '0',
+    clear: document.getElementById('clear').checked ? '1' : '0'
+  });
+
+  const res = await fetch('/run?' + params);
+  const reader = res.body.getReader();
+  const decoder = new TextDecoder();
+
+  while (true) {
+    const { done, value } = await reader.read();
+    if (done) break;
+    const text = decoder.decode(value);
+    for (const line of text.split('\\n')) {
+      if (!line.trim()) continue;
+      const cls = line.includes('✓') || line.includes('Done') ? 'ok'
+                : line.includes('rror') ? 'err'
+                : line.startsWith('  ') ? 'inf' : 'dim';
+      const d = document.createElement('div');
+      d.className = 'log-line ' + cls;
+      d.textContent = line;
+      log.appendChild(d);
+      log.scrollTop = log.scrollHeight;
+    }
+  }
+
+  btn.disabled = false; btn.textContent = '▶ Run Again';
+  document.getElementById('open-btn').style.display = 'block';
+}
+
+function openDash() {
+  window.open('/dashboard', '_blank');
+}
+</script>
+</body>
+</html>"""
 
 
-class Launcher(tk.Tk):
-    def __init__(self):
-        super().__init__()
-        self.title('Second Brain T')
-        self.configure(bg=BG)
-        self.resizable(False, False)
-        self.geometry('540x480')
-        self._center()
-        self._build_ui()
+class Handler(http.server.BaseHTTPRequestHandler):
+    def log_message(self, *a): pass  # suppress request logs
 
-    def _center(self):
-        self.update_idletasks()
-        w, h = 540, 480
-        x = (self.winfo_screenwidth() - w) // 2
-        y = (self.winfo_screenheight() - h) // 2
-        self.geometry(f'{w}x{h}+{x}+{y}')
+    def do_GET(self):
+        from urllib.parse import urlparse, parse_qs
 
-    def _build_ui(self):
-        # Header
-        hdr = tk.Frame(self, bg=BG, pady=24)
-        hdr.pack(fill='x')
-        tk.Label(hdr, text='🧠', font=('System', 32), bg=BG, fg=FG).pack()
-        tk.Label(hdr, text='Second Brain T', font=('Helvetica Neue', 18, 'bold'),
-                 bg=BG, fg=FG).pack()
-        tk.Label(hdr, text='Turn any folder into a knowledge base',
-                 font=('Helvetica Neue', 11), bg=BG, fg=MUTED).pack(pady=(4, 0))
+        parsed = urlparse(self.path)
 
-        # Folder picker
-        folder_frame = tk.Frame(self, bg=CARD, bd=0, padx=16, pady=14)
-        folder_frame.pack(fill='x', padx=24, pady=(0, 12))
-        tk.Label(folder_frame, text='Folder', font=('Helvetica Neue', 11, 'bold'),
-                 bg=CARD, fg=FG).pack(anchor='w')
+        if parsed.path == '/':
+            self._send(200, 'text/html', HTML.encode())
 
-        pick_row = tk.Frame(folder_frame, bg=CARD)
-        pick_row.pack(fill='x', pady=(6, 0))
+        elif parsed.path == '/run':
+            params = parse_qs(parsed.query)
+            folder = params.get('folder', [''])[0]
+            title  = params.get('title',  [''])[0]
+            cache  = params.get('cache',  ['1'])[0] == '1'
 
-        self.folder_var = tk.StringVar(value='No folder selected')
-        self.folder_label = tk.Label(pick_row, textvariable=self.folder_var,
-                                      font=('Helvetica Neue', 11), bg=CARD, fg=MUTED,
-                                      anchor='w', width=38, cursor='hand2')
-        self.folder_label.pack(side='left')
+            self.send_response(200)
+            self.send_header('Content-Type', 'text/plain; charset=utf-8')
+            self.send_header('Transfer-Encoding', 'chunked')
+            self.end_headers()
 
-        tk.Button(pick_row, text='Browse', font=('Helvetica Neue', 11),
-                  bg=ACCENT, fg='white', relief='flat', padx=12, pady=4,
-                  cursor='hand2', command=self._pick_folder).pack(side='right')
-
-        # Options
-        opts_frame = tk.Frame(self, bg=CARD, padx=16, pady=14)
-        opts_frame.pack(fill='x', padx=24, pady=(0, 12))
-        tk.Label(opts_frame, text='Options', font=('Helvetica Neue', 11, 'bold'),
-                 bg=CARD, fg=FG).pack(anchor='w', pady=(0, 8))
-
-        row1 = tk.Frame(opts_frame, bg=CARD)
-        row1.pack(fill='x')
-        tk.Label(row1, text='Title (optional)', font=('Helvetica Neue', 11),
-                 bg=CARD, fg=MUTED, width=18, anchor='w').pack(side='left')
-        self.title_var = tk.StringVar()
-        tk.Entry(row1, textvariable=self.title_var, font=('Helvetica Neue', 11),
-                 bg='#21262d', fg=FG, insertbackground=FG, relief='flat',
-                 highlightthickness=1, highlightbackground=BORDER, width=24).pack(side='left', padx=(8, 0))
-
-        row2 = tk.Frame(opts_frame, bg=CARD)
-        row2.pack(fill='x', pady=(8, 0))
-        self.cache_var = tk.BooleanVar(value=True)
-        tk.Checkbutton(row2, text='Use cache (faster for repeated runs)',
-                       variable=self.cache_var, font=('Helvetica Neue', 11),
-                       bg=CARD, fg=FG, selectcolor=CARD, activebackground=CARD,
-                       activeforeground=FG).pack(anchor='w')
-
-        # Log output
-        log_frame = tk.Frame(self, bg=CARD, padx=16, pady=10)
-        log_frame.pack(fill='both', expand=True, padx=24, pady=(0, 12))
-        self.log = tk.Text(log_frame, height=6, font=('Menlo', 10),
-                           bg='#010409', fg=FG, relief='flat', wrap='word',
-                           state='disabled', pady=4)
-        self.log.pack(fill='both', expand=True)
-        self.log.tag_config('ok', foreground=GREEN)
-        self.log.tag_config('err', foreground=RED)
-        self.log.tag_config('info', foreground=ACCENT)
-
-        # Run button
-        btn_row = tk.Frame(self, bg=BG)
-        btn_row.pack(pady=(0, 20))
-        self.run_btn = tk.Button(btn_row, text='▶  Run Second Brain T',
-                                  font=('Helvetica Neue', 13, 'bold'),
-                                  bg=ACCENT, fg='white', relief='flat',
-                                  padx=28, pady=10, cursor='hand2',
-                                  command=self._run)
-        self.run_btn.pack()
-
-        self.status_var = tk.StringVar(value='Ready')
-        tk.Label(self, textvariable=self.status_var,
-                 font=('Helvetica Neue', 10), bg=BG, fg=MUTED).pack()
-
-    def _pick_folder(self):
-        folder = filedialog.askdirectory(title='Select your folder')
-        if folder:
-            self.folder_var.set(folder)
-            self.folder_label.config(fg=FG)
-
-    def _log(self, msg: str, tag: str = ''):
-        self.log.config(state='normal')
-        self.log.insert('end', msg + '\n', tag)
-        self.log.see('end')
-        self.log.config(state='disabled')
-
-    def _run(self):
-        folder = self.folder_var.get()
-        if folder == 'No folder selected' or not os.path.isdir(folder):
-            messagebox.showerror('Error', 'Please select a valid folder first.')
-            return
-
-        self.run_btn.config(state='disabled', text='Running...')
-        self.status_var.set('Building knowledge base...')
-        self.log.config(state='normal')
-        self.log.delete('1.0', 'end')
-        self.log.config(state='disabled')
-
-        def worker():
+            clear = params.get('clear', ['0'])[0] == '1'
             cmd = [sys.executable, str(SCRIPT), folder]
-            title = self.title_var.get().strip()
-            if title:
-                cmd += ['--title', title]
-            if not self.cache_var.get():
-                cmd.append('--no-cache')
+            if title: cmd += ['--title', title]
+            if not cache: cmd.append('--no-cache')
+            cmd.append('--clear' if clear else '--update')
 
             try:
-                proc = subprocess.Popen(
-                    cmd, stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
-                    text=True, bufsize=1
-                )
+                proc = subprocess.Popen(cmd, stdout=subprocess.PIPE,
+                                        stderr=subprocess.STDOUT, text=True)
                 for line in proc.stdout:
-                    line = line.rstrip()
-                    if not line:
-                        continue
-                    tag = 'ok' if '✓' in line or 'Done' in line else \
-                          'err' if 'error' in line.lower() else \
-                          'info' if line.startswith(' ') else ''
-                    self.after(0, self._log, line, tag)
+                    chunk = line.encode('utf-8')
+                    self.wfile.write(f'{len(chunk):X}\r\n'.encode())
+                    self.wfile.write(chunk + b'\r\n')
+                    self.wfile.flush()
                 proc.wait()
-                if proc.returncode == 0:
-                    self.after(0, self._on_success, folder)
-                else:
-                    self.after(0, self._on_error)
             except Exception as e:
-                self.after(0, self._log, f'Error: {e}', 'err')
-                self.after(0, self._on_error)
+                msg = f'Error: {e}\n'.encode()
+                self.wfile.write(f'{len(msg):X}\r\n'.encode())
+                self.wfile.write(msg + b'\r\n')
+            self.wfile.write(b'0\r\n\r\n')
 
-        threading.Thread(target=worker, daemon=True).start()
+        elif parsed.path == '/dashboard':
+            dash = OUT / 'index.html'
+            if dash.exists():
+                self._send(200, 'text/html', dash.read_bytes())
+            else:
+                self._send(404, 'text/plain', b'No output yet - run the tool first.')
 
-    def _on_success(self, folder: str):
-        self.run_btn.config(state='normal', text='▶  Run Second Brain T')
-        self.status_var.set('✓ Done!')
-        self._log('✓ Knowledge base ready!', 'ok')
-        out = Path(__file__).parent / 'output' / 'index.html'
-        if out.exists():
-            import webbrowser
-            webbrowser.open(str(out))
-            self._log('→ Opening dashboard in browser...', 'info')
+        else:
+            self._send(404, 'text/plain', b'Not found')
 
-    def _on_error(self):
-        self.run_btn.config(state='normal', text='▶  Run Second Brain T')
-        self.status_var.set('Something went wrong — check the log above')
+    def _send(self, code, ctype, body):
+        self.send_response(code)
+        self.send_header('Content-Type', ctype)
+        self.send_header('Content-Length', len(body))
+        self.end_headers()
+        self.wfile.write(body)
+
+
+def main():
+    server = http.server.HTTPServer(('127.0.0.1', PORT), Handler)
+    url = f'http://localhost:{PORT}'
+    print(f'\n🧠 Second Brain T launcher running at {url}')
+    print('   Opening in browser...\n')
+    threading.Timer(0.5, lambda: webbrowser.open(url)).start()
+    try:
+        server.serve_forever()
+    except KeyboardInterrupt:
+        print('\nStopped.')
 
 
 if __name__ == '__main__':
-    app = Launcher()
-    app.mainloop()
+    main()

@@ -143,17 +143,22 @@ def parse_args():
     target = None
     title = 'Knowledge Base'
     use_cache = True
+    clear_output = None  # None = ask, True = clear, False = update
     i = 0
     while i < len(args):
         if args[i] == '--title' and i + 1 < len(args):
             title = args[i + 1]; i += 2
         elif args[i] == '--no-cache':
             use_cache = False; i += 1
+        elif args[i] == '--clear':
+            clear_output = True; i += 1
+        elif args[i] == '--update':
+            clear_output = False; i += 1
         elif not args[i].startswith('--'):
             target = Path(args[i]).resolve(); i += 1
         else:
             i += 1
-    return target, title, use_cache
+    return target, title, use_cache, clear_output
 
 
 # ── Helpers ───────────────────────────────────────────────────────────────────
@@ -1432,9 +1437,9 @@ def install_skill(target: Path):
 # ── Main ──────────────────────────────────────────────────────────────────────
 
 def main():
-    target, title, use_cache = parse_args()
+    target, title, use_cache, clear_output = parse_args()
     if not target:
-        print('Usage: python3 build.py <folder> [--title "Name"] [--no-cache]')
+        print('Usage: python3 build.py <folder> [--title "Name"] [--no-cache] [--clear] [--update]')
         sys.exit(1)
     if not target.exists():
         print(f'Error: {target} not found')
@@ -1442,29 +1447,35 @@ def main():
 
     OUT = Path(__file__).parent / 'output'
 
-    # Ask before clearing if output already exists
+    print(f'\nSecond Brain T v1.0')
+    print(f'  Source : {target}')
+    print(f'  Output : {OUT}\n')
+
+    # Handle existing output
     if OUT.exists() and any(OUT.iterdir()):
-        print(f'\nSecond Brain T v1.0')
-        print(f'  Source : {target}')
-        print(f'  Output : {OUT}\n')
-        print('⚠️  Output folder already has content from a previous run.')
-        print('  [c] Clear and start fresh')
-        print('  [u] Update (keep existing files, add new ones)')
-        print('  [q] Quit')
-        choice = input('\nYour choice (c/u/q): ').strip().lower()
-        if choice == 'q':
-            print('Cancelled.')
-            sys.exit(0)
-        elif choice == 'c':
-            import shutil
-            shutil.rmtree(OUT)
+        if clear_output is True:
+            import shutil; shutil.rmtree(OUT)
             print('  Cleared.\n')
-        else:
+        elif clear_output is False:
             print('  Updating existing output.\n')
-    else:
-        print(f'\nSecond Brain T v1.0')
-        print(f'  Source : {target}')
-        print(f'  Output : {OUT}\n')
+        else:
+            # Interactive prompt (terminal only)
+            print('⚠️  Output folder already has content from a previous run.')
+            print('  [c] Clear and start fresh')
+            print('  [u] Update (keep existing files, add new ones)')
+            print('  [q] Quit')
+            try:
+                choice = input('\nYour choice (c/u/q): ').strip().lower()
+            except EOFError:
+                choice = 'u'
+            if choice == 'q':
+                print('Cancelled.')
+                sys.exit(0)
+            elif choice == 'c':
+                import shutil; shutil.rmtree(OUT)
+                print('  Cleared.\n')
+            else:
+                print('  Updating existing output.\n')
 
     OUT.mkdir(parents=True, exist_ok=True)
 
