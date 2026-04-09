@@ -945,11 +945,32 @@ def main():
         sys.exit(1)
 
     OUT = Path(__file__).parent / 'output'
-    OUT.mkdir(parents=True, exist_ok=True)
 
-    print(f'\nSecond Brain T v1.0')
-    print(f'  Source : {target}')
-    print(f'  Output : {OUT}\n')
+    # Ask before clearing if output already exists
+    if OUT.exists() and any(OUT.iterdir()):
+        print(f'\nSecond Brain T v1.0')
+        print(f'  Source : {target}')
+        print(f'  Output : {OUT}\n')
+        print('⚠️  Output folder already has content from a previous run.')
+        print('  [c] Clear and start fresh')
+        print('  [u] Update (keep existing files, add new ones)')
+        print('  [q] Quit')
+        choice = input('\nYour choice (c/u/q): ').strip().lower()
+        if choice == 'q':
+            print('Cancelled.')
+            sys.exit(0)
+        elif choice == 'c':
+            import shutil
+            shutil.rmtree(OUT)
+            print('  Cleared.\n')
+        else:
+            print('  Updating existing output.\n')
+    else:
+        print(f'\nSecond Brain T v1.0')
+        print(f'  Source : {target}')
+        print(f'  Output : {OUT}\n')
+
+    OUT.mkdir(parents=True, exist_ok=True)
 
     # Always auto-convert PDFs, Word docs, and PowerPoint files
     pdfs = collect_pdfs(target)
