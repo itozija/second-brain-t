@@ -235,11 +235,53 @@ def collect_pdfs(folder: Path) -> List[Path]:
 # ── PDF conversion ────────────────────────────────────────────────────────────
 
 def convert_pdfs(folder: Path) -> int:
+    # Try PyMuPDF first (better quality), fall back to pdfplumber
+    try:
+        import fitz  # PyMuPDF
+        return _convert_pdfs_fitz(folder, fitz)
+    except ImportError:
+        pass
     try:
         import pdfplumber
+        return _convert_pdfs_plumber(folder, pdfplumber)
     except ImportError:
-        print('  pdfplumber not installed — skipping PDFs (pip3 install pdfplumber)')
+        print('  No PDF library found — install PyMuPDF: pip3 install PyMuPDF')
         return 0
+
+def _convert_pdfs_fitz(folder: Path, fitz) -> int:
+    converted = 0
+    for pdf_path in collect_pdfs(folder):
+        md_path = pdf_path.with_suffix('.md')
+        if md_path.exists():
+            continue
+        try:
+            doc = fitz.open(str(pdf_path))
+            # Extract real metadata from PDF
+            meta = doc.metadata or {}
+            real_title = (meta.get('title') or '').strip()
+            real_author = (meta.get('author') or '').strip()
+            pages = []
+            for i, page in enumerate(doc):
+                text = page.get_text('text')
+                if text and text.strip():
+                    # Fix common PDF garbling: words run together
+                    text = re.sub(r'([a-z])([A-Z])', r'\1 \2', text)
+                    pages.append(f'<!-- Page {i+1} -->\n{text.strip()}')
+            doc.close()
+            if pages:
+                fm_title = real_title if real_title and len(real_title) > 3 else pdf_path.stem
+                fm_author = real_author if real_author else ''
+                frontmatter = f'---\ntitle: "{fm_title}"\nauthor: "{fm_author}"\nsource: "{pdf_path.name}"\n---\n\n'
+                heading = f'# {fm_title}\n\n'
+                content = frontmatter + heading + '\n\n---\n\n'.join(pages)
+                md_path.write_text(content, encoding='utf-8')
+                converted += 1
+                print(f'  PDF → {md_path.name}')
+        except Exception as e:
+            print(f'  PDF error {pdf_path.name}: {e}')
+    return converted
+
+def _convert_pdfs_plumber(folder: Path, pdfplumber) -> int:
     converted = 0
     for pdf_path in collect_pdfs(folder):
         md_path = pdf_path.with_suffix('.md')
@@ -253,7 +295,7 @@ def convert_pdfs(folder: Path) -> int:
                     if text and text.strip():
                         pages.append(f'<!-- Page {i+1} -->\n{text.strip()}')
             if pages:
-                content = (f'---\ntitle: "{pdf_path.stem}"\nsource: "{pdf_path.name}"\n---\n\n'
+                content = (f'---\ntitle: "{pdf_path.stem}"\nauthor: ""\nsource: "{pdf_path.name}"\n---\n\n'
                            f'# {pdf_path.stem}\n\n' + '\n\n---\n\n'.join(pages))
                 md_path.write_text(content, encoding='utf-8')
                 converted += 1
@@ -522,22 +564,36 @@ def extract_citation(path: Path, text: str) -> dict:
     """Extract citation metadata: author, year, title."""
     citation = {'title': '', 'authors': '', 'year': '', 'source': path.name}
 
+    # First try frontmatter (set by PyMuPDF converter)
+    fm_author = re.search(r'^author:\s*["\']?(.+?)["\']?\s*$', text[:400], re.MULTILINE)
+    fm_title  = re.search(r'^title:\s*["\']?(.+?)["\']?\s*$', text[:400], re.MULTILINE)
+    if fm_author:
+        a = fm_author.group(1).strip()
+        if a and a != path.stem and len(a) > 2:
+            citation['authors'] = a
+    if fm_title:
+        t = fm_title.group(1).strip()
+        if t and t != path.stem and len(t) > 3:
+            citation['title'] = t
+
     # Year — look for 4-digit year between 1950-2030
     year_match = re.search(r'\b(19[5-9]\d|20[0-2]\d)\b', text[:1000])
     if year_match:
         citation['year'] = year_match.group(1)
 
-    # Authors — look for patterns like "LastName, F." or "LastName et al."
-    author_match = re.search(
-        r'([A-Z][a-z]+(?:,\s+[A-Z]\.?)+(?:\s+and\s+[A-Z][a-z]+(?:,\s+[A-Z]\.?)*)*'
-        r'|[A-Z][a-z]+\s+et\s+al\.)',
-        text[:500]
-    )
-    if author_match:
-        citation['authors'] = author_match.group(0).strip()
+    # Fallback authors from body — "LastName et al." or "LastName, F."
+    if not citation['authors']:
+        author_match = re.search(
+            r'([A-Z][a-z]{2,}(?:,\s+[A-Z]\.?)+(?:\s+and\s+[A-Z][a-z]+(?:,\s+[A-Z]\.?)*)*'
+            r'|[A-Z][a-z]{2,}\s+et\s+al\.)',
+            text[text.find('-->'): text.find('-->')+800] if '-->' in text else text[:800]
+        )
+        if author_match:
+            citation['authors'] = author_match.group(0).strip()
 
-    # Title from label
-    citation['title'] = extract_title(path, text)
+    # Title fallback
+    if not citation['title']:
+        citation['title'] = extract_title(path, text)
 
     return citation
 
@@ -664,21 +720,36 @@ def find_relationships(entities: List[dict]) -> List[dict]:
 # ── Community detection (label propagation, no external deps) ─────────────────
 
 def detect_communities(entities: List[dict], edges: List[dict]) -> Dict[str, int]:
-    import random
+    import random, math
     ids = [e['id'] for e in entities]
     topic_map = {e['id']: e['topic'] for e in entities}
+    N = len(entities)
 
-    # Build adjacency using topic-aware weighting
+    # TF-IDF weighting: rare shared keywords count more than common ones
+    # Build document frequency for each keyword
+    kw_doc_freq: Counter = Counter()
+    kw_map = {e['id']: set(e['keywords']) for e in entities}
+    for kws in kw_map.values():
+        for kw in kws:
+            kw_doc_freq[kw] += 1
+
+    def tfidf_overlap(id_a: str, id_b: str) -> float:
+        shared = kw_map.get(id_a, set()) & kw_map.get(id_b, set())
+        if not shared:
+            return 0.0
+        return sum(math.log(N / (kw_doc_freq[kw] + 1)) for kw in shared)
+
+    # Build adjacency with TF-IDF + topic boost
     adj: Dict[str, Dict[str, float]] = defaultdict(dict)
     for edge in edges:
         src, tgt, w = edge['from'], edge['to'], edge['weight']
-        if src not in adj or tgt not in adj[src]:
-            # Boost edges between same-topic nodes
-            boost = 1.5 if topic_map.get(src) == topic_map.get(tgt) else 1.0
-            adj[src][tgt] = w * boost
-            adj[tgt][src] = w * boost
+        tfidf = tfidf_overlap(src, tgt)
+        boost = 2.0 if topic_map.get(src) == topic_map.get(tgt) else 1.0
+        score = (w + tfidf) * boost
+        adj[src][tgt] = score
+        adj[tgt][src] = score
 
-    # Seed communities by topic
+    # Seed by topic so each topic starts as its own community
     topic_seeds: Dict[str, int] = {}
     seed_counter = 0
     labels = {}
@@ -690,7 +761,7 @@ def detect_communities(entities: List[dict], edges: List[dict]) -> Dict[str, int
         labels[e['id']] = topic_seeds[t]
 
     # Label propagation with weighted voting
-    for _ in range(50):
+    for _ in range(100):
         changed = False
         order = ids[:]
         random.shuffle(order)
