@@ -564,16 +564,31 @@ def build_entities(files: List[Path], target: Path, cache: Cache) -> List[dict]:
         ast_nodes, ast_edges = [], []
         if f.suffix in CODE_EXTS:
             ast_nodes, ast_edges = extract_code_structure(f)
+        word_count = len(clean.split())
+        citation = extract_citation(f, clean)
+        # Build display label: "Author (Year) — Title"
+        auth_short = citation['authors'].split(',')[0].strip() if citation['authors'] else ''
+        year = citation['year']
+        raw_title = extract_title(f, text)
+        if auth_short and year:
+            display_label = f'{auth_short} ({year}) — {raw_title}'
+        elif year:
+            display_label = f'({year}) — {raw_title}'
+        else:
+            display_label = raw_title
         entity = {
             'id': slugify(f.stem),
-            'label': extract_title(f, text),
+            'label': display_label,
+            'title': raw_title,
             'file': str(f.relative_to(target)),
             'ext': f.suffix,
             'text': clean,
             'keywords': extract_keywords(clean),
             'topic': infer_topic(f, clean),
             'summary': extract_summary(clean),
-            'citation': extract_citation(f, clean),
+            'citation': citation,
+            'word_count': word_count,
+            'read_minutes': max(1, round(word_count / 200)),
             'ast_nodes': ast_nodes,
             'ast_edges': [[a, b] for a, b in ast_edges],
             'is_code': f.suffix in CODE_EXTS,
@@ -748,6 +763,7 @@ def build_tiers(entities: List[dict], edges: List[dict], out_dir: Path, title: s
             f'# {e["label"]} — Tier 2: Deep Context\n',
             f'_File: `{e["file"]}` | Topic: {e["topic"]}_\n',
             f'_Keywords: {", ".join(e["keywords"][:8])}_\n',
+            f'_Words: {e.get("word_count",0):,} | Reading time: ~{e.get("read_minutes",1)} min_\n',
         ]
         if e.get('summary'):
             lines += ['\n## Summary\n', e['summary'], '']
@@ -1029,9 +1045,19 @@ def build_dashboard(entities: List[dict], edges: List[dict], out_dir: Path, titl
     topics: Dict[str, list] = defaultdict(list)
     for e in entities:
         topics[e['topic']].append(e)
+    # Topic cards with tag clouds
+    def topic_tags(ents):
+        all_kw = Counter()
+        for e in ents:
+            for kw in e['keywords'][:5]:
+                all_kw[kw] += 1
+        return ' '.join(f'<span class="tag">{kw}</span>' for kw, _ in all_kw.most_common(5))
+
     cards = ''.join(
-        f'<div class="card"><div style="width:10px;height:10px;border-radius:50%;background:{TOPIC_COLORS.get(t,"#888")};flex-shrink:0"></div>'
-        f'<div><div class="ct">{t.replace("-"," ").title()}</div><div class="cs">{len(ents)} entities</div></div></div>'
+        f'<div class="card"><div style="width:10px;height:36px;border-radius:4px;background:{TOPIC_COLORS.get(t,"#888")};flex-shrink:0"></div>'
+        f'<div><div class="ct">{t.replace("-"," ").title()}</div>'
+        f'<div class="cs">{len(ents)} papers</div>'
+        f'<div class="tags">{topic_tags(ents)}</div></div></div>'
         for t, ents in sorted(topics.items()))
 
     # Build search index — id, label, topic, keywords, summary
@@ -1080,6 +1106,8 @@ body{{font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif;backgro
 .cards{{display:grid;grid-template-columns:repeat(auto-fill,minmax(175px,1fr));gap:10px}}
 .card{{background:#161b22;border:1px solid #30363d;border-radius:8px;padding:12px 14px;display:flex;align-items:center;gap:10px}}
 .ct{{font-size:13px;font-weight:500}}.cs{{font-size:11px;color:#8b949e;margin-top:2px}}
+.tags{{display:flex;flex-wrap:wrap;gap:4px;margin-top:6px}}
+.tag{{background:#21262d;color:#8b949e;font-size:10px;padding:2px 7px;border-radius:8px;border:1px solid #30363d}}
 footer{{text-align:center;padding:20px;font-size:11px;color:#484f58}}
 </style>
 </head>
@@ -1105,6 +1133,8 @@ footer{{text-align:center;padding:20px;font-size:11px;color:#484f58}}
     <a href="tiers/index.md" class="btn bs">📦 Context Tiers</a>
     <a href="graph/report.md" class="btn bs">📊 Report</a>
     <a href="bibliography.md" class="btn bs">📚 Bibliography</a>
+    <a href="reading-order.md" class="btn bs">📋 Reading List</a>
+    <a href="insights.md" class="btn bs">🔍 Insights</a>
   </div>
 </div>
 
@@ -1148,6 +1178,122 @@ input.addEventListener('input', () => {{
 </html>"""
     (out_dir / 'index.html').write_text(html, encoding='utf-8')
     print(f'  Dashboard: index.html')
+
+
+# ── Reading list ──────────────────────────────────────────────────────────────
+
+def build_reading_list(entities: List[dict], edges: List[dict], out_dir: Path, title: str):
+    """Generate a suggested reading order based on connection count (most connected = most foundational)."""
+    degree: Dict[str, int] = defaultdict(int)
+    for edge in edges:
+        degree[edge['from']] += 1
+        degree[edge['to']] += 1
+
+    id_map = {e['id']: e for e in entities}
+    ranked = sorted(entities, key=lambda e: -degree[e['id']])
+
+    lines = [
+        f'# {title} — Suggested Reading Order\n',
+        f'_Papers ranked by how many connections they have — most foundational first._\n',
+        f'_Generated: {datetime.now().strftime("%Y-%m-%d %H:%M")}_\n',
+        '\n---\n',
+    ]
+
+    topics_seen: Dict[str, list] = defaultdict(list)
+    for e in ranked:
+        topics_seen[e['topic']].append(e)
+
+    rank = 1
+    for topic, ents in sorted(topics_seen.items(), key=lambda x: -sum(degree[e['id']] for e in x[1])):
+        lines.append(f'\n## {topic.replace("-"," ").title()}\n')
+        for e in ents:
+            mins = e.get('read_minutes', 1)
+            conn = degree[e['id']]
+            c = e['citation']
+            auth = c['authors'].split(',')[0] if c['authors'] else ''
+            year = c['year'] or 'n.d.'
+            label = f'{auth} ({year})' if auth else e['label'][:60]
+            lines.append(f'{rank}. **{label}** — {conn} connections · ~{mins} min read')
+            if e.get('summary'):
+                lines.append(f'   > {e["summary"][:150]}...')
+            lines.append('')
+            rank += 1
+
+    out_dir.mkdir(parents=True, exist_ok=True)
+    (out_dir / 'reading-order.md').write_text('\n'.join(lines), encoding='utf-8')
+    print(f'  Reading list: reading-order.md')
+
+
+# ── Duplicate detection ────────────────────────────────────────────────────────
+
+def detect_duplicates(entities: List[dict]) -> List[Tuple[dict, dict, float]]:
+    """Find pairs of documents that look like duplicates (keyword overlap > 70%)."""
+    duplicates = []
+    for i, a in enumerate(entities):
+        for b in entities[i+1:]:
+            kw_a = set(a['keywords'])
+            kw_b = set(b['keywords'])
+            if not kw_a or not kw_b:
+                continue
+            overlap = len(kw_a & kw_b) / len(kw_a | kw_b)
+            if overlap >= 0.70:
+                duplicates.append((a, b, overlap))
+    return sorted(duplicates, key=lambda x: -x[2])
+
+
+# ── Gap detection ──────────────────────────────────────────────────────────────
+
+def detect_gaps(entities: List[dict], edges: List[dict]) -> List[dict]:
+    """Find orphan documents — connected to fewer than 2 others."""
+    degree: Dict[str, int] = defaultdict(int)
+    for edge in edges:
+        degree[edge['from']] += 1
+        degree[edge['to']] += 1
+    return [e for e in entities if degree[e['id']] < 2]
+
+
+# ── Insights report ────────────────────────────────────────────────────────────
+
+def build_insights(entities: List[dict], edges: List[dict], out_dir: Path, title: str):
+    """Generate insights: duplicates, gaps, reading stats."""
+    duplicates = detect_duplicates(entities)
+    gaps = detect_gaps(entities, edges)
+    total_words = sum(e.get('word_count', 0) for e in entities)
+    total_mins = sum(e.get('read_minutes', 1) for e in entities)
+
+    lines = [
+        f'# {title} — Insights\n',
+        f'_Generated: {datetime.now().strftime("%Y-%m-%d %H:%M")}_\n',
+        '\n---\n',
+        f'\n## 📊 Reading Stats\n',
+        f'- **Total documents:** {len(entities)}',
+        f'- **Total words:** {total_words:,}',
+        f'- **Total reading time:** ~{total_mins} minutes (~{total_mins//60}h {total_mins%60}m)',
+        f'- **Average per paper:** ~{total_words//max(len(entities),1):,} words · ~{total_mins//max(len(entities),1)} min',
+    ]
+
+    if duplicates:
+        lines += [f'\n## ⚠️ Possible Duplicates ({len(duplicates)} pairs)\n',
+                  '_These pairs share 70%+ of their keywords — may be the same paper downloaded twice._\n']
+        for a, b, score in duplicates[:10]:
+            lines.append(f'- **{a["label"][:60]}**')
+            lines.append(f'  ↔ **{b["label"][:60]}** ({score:.0%} overlap)')
+            lines.append('')
+    else:
+        lines += ['\n## ✅ No Duplicates Found\n']
+
+    if gaps:
+        lines += [f'\n## 🔍 Orphan Documents ({len(gaps)} files)\n',
+                  '_These documents have fewer than 2 connections — possibly misclassified or very different from the rest._\n']
+        for e in gaps:
+            mins = e.get('read_minutes', 1)
+            lines.append(f'- **{e["label"][:80]}** ({e["topic"]}) · ~{mins} min')
+    else:
+        lines += ['\n## ✅ No Orphans Found\n']
+
+    out_dir.mkdir(parents=True, exist_ok=True)
+    (out_dir / 'insights.md').write_text('\n'.join(lines), encoding='utf-8')
+    print(f'  Insights: insights.md')
 
 
 # ── Citation export ───────────────────────────────────────────────────────────
@@ -1291,6 +1437,8 @@ def main():
     stats = build_graph(entities, edges, OUT / 'graph', title, communities)
     stats['communities'] = n_comm
     build_citations(entities, OUT, title)
+    build_reading_list(entities, edges, OUT, title)
+    build_insights(entities, edges, OUT, title)
     build_dashboard(entities, edges, OUT, title, stats)
     install_skill(target)
 
