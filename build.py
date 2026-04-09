@@ -47,6 +47,18 @@ MAX_FILE_CHARS = 10000
 CACHE_DIR_NAME = '.sbt-cache'
 
 TOPIC_COLORS = {
+    # Research topics
+    'megaprojects':       '#4A90D9',
+    'culture':            '#E74C3C',
+    'institutions':       '#9B59B6',
+    'technology':         '#1ABC9C',
+    'time-temporality':   '#F5A623',
+    'methods':            '#2ECC71',
+    'development':        '#E67E22',
+    'social-impact':      '#F39C12',
+    'politics':           '#27AE60',
+    'knowledge':          '#8E44AD',
+    # Code topics (for software projects)
     'api':                '#E74C3C',
     'auth':               '#9B59B6',
     'config':             '#95A5A6',
@@ -57,7 +69,6 @@ TOPIC_COLORS = {
     'frontend':           '#3498DB',
     'graph':              '#F39C12',
     'installation':       '#27AE60',
-    'megaproject-theory': '#4A90D9',
     'testing':            '#E67E22',
     'wiki':               '#8E44AD',
     'general':            '#BDC3C7',
@@ -78,6 +89,38 @@ STOPWORDS = {
 }
 
 TOPIC_RULES = [
+    # ── Research topics (checked first) ───────────────────────────────────────
+    (['megaproject', 'infrastructure', 'cost overrun', 'flyvbjerg', 'iron law',
+      'cost underestimation', 'transportation project', 'major project',
+      'project delivery', 'planning fallacy'], 'megaprojects'),
+    (['culture', 'cultural', 'hofstede', 'swidler', 'markus', 'kitayama',
+      'values', 'norms', 'identity', 'cognition', 'self-construal',
+      'individualism', 'collectivism', 'symbolic'], 'culture'),
+    (['institution', 'institutional', 'legitimacy', 'logics', 'field',
+      'organizational', 'governance', 'state fragility', 'entrepreneurship',
+      'informal economy', 'poverty', 'microfinance', 'isomorphism'], 'institutions'),
+    (['technology', 'technological', 'artifact', 'sociotechnical', 'routine',
+      'agency', 'materiality', 'infrastructure', 'standard', 'classification',
+      'winner', 'leonardi', 'barley', 'latour', 'actor-network'], 'technology'),
+    (['temporal', 'time', 'temporality', 'clock', 'schedule', 'deadline',
+      'future', 'prophecy', 'punctuated', 'process', 'duration',
+      'reinecke', 'thompson', 'guyer'], 'time-temporality'),
+    (['method', 'methodology', 'research design', 'qualitative', 'quantitative',
+      'randomized', 'evidence', 'ethnography', 'case study', 'survey',
+      'rigorous', 'evaluation', 'impact evaluation', 'rct'], 'methods'),
+    (['development', 'developing', 'global south', 'aid', 'cameroon', 'africa',
+      'kenya', 'ukraine', 'conflict', 'fragile', 'participation',
+      'community', 'poverty reduction', 'world bank'], 'development'),
+    (['social impact', 'impact accounting', 'beneficiar', 'evaluator',
+      'social value', 'creating value', 'measurement', 'accounting',
+      'materiality', 'empowerment', 'harambee'], 'social-impact'),
+    (['political', 'politics', 'power', 'state', 'public', 'policy',
+      'government', 'regulation', 'authority', 'sovereignty',
+      'financing', 'revolution', 'reform'], 'politics'),
+    (['knowledge', 'epistemolog', 'science', 'facts', 'truth',
+      'classification', 'ontolog', 'paradigm', 'discourse',
+      'narrative', 'story', 'framing', 'post-truth'], 'knowledge'),
+    # ── Code topics (for software projects) ───────────────────────────────────
     (['install', 'setup', 'getting-started', 'requirements', 'install.sh'], 'installation'),
     (['api', 'route', 'endpoint', 'server', 'rest'], 'api'),
     (['auth', 'login', 'signup', 'middleware', 'session', 'oauth', 'token'], 'auth'),
@@ -87,10 +130,9 @@ TOPIC_RULES = [
     (['test', 'spec', 'e2e', 'fixture', 'mock'], 'testing'),
     (['extract', 'parse', 'ast', 'tree-sitter', 'ingest', 'detect', 'analyze'], 'extraction'),
     (['graph', 'cluster', 'node', 'edge', 'network', 'leiden', 'louvain', 'vis'], 'graph'),
-    (['wiki', 'obsidian', 'wikilink', 'vault', 'tier', 'compiled', 'knowledge'], 'wiki'),
+    (['wiki', 'obsidian', 'wikilink', 'vault', 'tier', 'compiled'], 'wiki'),
     (['readme', 'changelog', 'contributing', 'license', 'architecture', 'security'], 'docs'),
     (['bias', 'heuristic', 'decision', 'cognitive', 'behavior', 'behavioral'], 'decision-making'),
-    (['megaproject', 'iron law', 'infrastructure', 'cost overrun', 'flyvbjerg'], 'megaproject-theory'),
 ]
 
 
@@ -378,11 +420,76 @@ def extract_code_structure(path: Path):
 # ── Topic + keyword extraction ────────────────────────────────────────────────
 
 def infer_topic(path: Path, text: str) -> str:
-    combined = ' '.join(p.lower() for p in path.parts) + ' ' + text[:500].lower()
+    combined = ' '.join(p.lower() for p in path.parts) + ' ' + text[:2000].lower()
     for keywords, topic in TOPIC_RULES:
         if any(k in combined for k in keywords):
             return topic
     return 'general'
+
+def extract_title(path: Path, text: str) -> str:
+    """Try to extract a real human-readable title from document content."""
+    SKIP_PATTERNS = re.compile(
+        r'(journal|homepage|www\.|http|vol\.|contents|elsevier|springer|wiley|jstor'
+        r'|tandfonline|sagepub|sciencedirect|\.com|\.org|copyright|©|issn'
+        r'|article info|abstract|keywords|download|available online'
+        r'|cite this article|digital archive|subscriber|bluebook'
+        r'|pages \d|number \d|volume \d|beech tree|guild|publishing'
+        r'|we use information technology|productivity and facilitates'
+        r'|user name|this digital copy|extract and the work'
+        r'|long, norman|to cite this|aligning incentives)',
+        re.IGNORECASE
+    )
+
+    # For converted documents: scan body text for a real title
+    # Strategy: find lines that look like paper/chapter titles
+    body = strip_frontmatter(text)
+    lines = body.splitlines()
+    candidates = []
+    for line in lines[:80]:
+        line = line.strip()
+        # Skip page markers, short lines, headings that are just filenames
+        if not line or line.startswith('<!--') or line.startswith('#'):
+            continue
+        if SKIP_PATTERNS.search(line):
+            continue
+        # Skip lines that look like author names (contain initials like "A.B.") or affiliations
+        if re.search(r'\b[A-Z]\.\s*[A-Z]\.|\bUniversity\b|\bDepartment\b|\bSchool\b', line):
+            continue
+        # Skip lines that are mostly numbers/codes
+        if re.match(r'^[\d\s\(\)\-\.,]+$', line):
+            continue
+        # Good candidate: 20-200 chars, mixed case, reads like a title
+        if 20 <= len(line) <= 200 and re.search(r'[a-z]', line) and re.search(r'[A-Za-z]{3}', line):
+            candidates.append(line)
+        if len(candidates) >= 3:
+            break
+
+    if candidates:
+        # Pick the best candidate — prefer longer, more title-like lines
+        best = max(candidates, key=lambda l: (
+            len(re.findall(r'[a-z]', l)),   # more lowercase = more likely a sentence
+            len(l.split()),                  # more words = more likely a full title
+        ))
+        # Clean trailing junk (like "T" at end from PDF extraction artifacts)
+        best = re.sub(r'\s+[A-Z]$', '', best).strip()
+        if len(best) > 10:
+            return best[:120]
+
+    # Look for first real markdown heading (not a filename)
+    for line in lines[:40]:
+        line = line.strip()
+        if line.startswith('# '):
+            title = line.lstrip('#').strip()
+            if (not re.match(r'^[\w\-\.]+$', title) and len(title) > 10
+                    and not SKIP_PATTERNS.search(title)):
+                return title[:120]
+
+    # Fall back to cleaned filename
+    stem = path.stem
+    stem = re.sub(r'^[\d\-]+s\d+[\.\-][A-Z0-9]+.*', '', stem).strip('-_ ')
+    if not stem or len(stem) < 4:
+        stem = path.stem
+    return stem.replace('-', ' ').replace('_', ' ').title()
 
 def extract_keywords(text: str, top_n: int = 15) -> List[str]:
     words = re.sub(r'[^a-zA-Z\s]', ' ', text.lower()).split()
@@ -408,7 +515,7 @@ def build_entities(files: List[Path], target: Path, cache: Cache) -> List[dict]:
             ast_nodes, ast_edges = extract_code_structure(f)
         entity = {
             'id': slugify(f.stem),
-            'label': f.stem.replace('-', ' ').replace('_', ' ').title(),
+            'label': extract_title(f, text),
             'file': str(f.relative_to(target)),
             'ext': f.suffix,
             'text': clean,
@@ -491,27 +598,48 @@ def find_relationships(entities: List[dict]) -> List[dict]:
 def detect_communities(entities: List[dict], edges: List[dict]) -> Dict[str, int]:
     import random
     ids = [e['id'] for e in entities]
-    adj: Dict[str, set] = defaultdict(set)
+    topic_map = {e['id']: e['topic'] for e in entities}
+
+    # Build adjacency using topic-aware weighting
+    adj: Dict[str, Dict[str, float]] = defaultdict(dict)
     for edge in edges:
-        if edge['weight'] >= 6:
-            adj[edge['from']].add(edge['to'])
-            adj[edge['to']].add(edge['from'])
-    labels = {n: i for i, n in enumerate(ids)}
-    for _ in range(25):
+        src, tgt, w = edge['from'], edge['to'], edge['weight']
+        if src not in adj or tgt not in adj[src]:
+            # Boost edges between same-topic nodes
+            boost = 1.5 if topic_map.get(src) == topic_map.get(tgt) else 1.0
+            adj[src][tgt] = w * boost
+            adj[tgt][src] = w * boost
+
+    # Seed communities by topic
+    topic_seeds: Dict[str, int] = {}
+    seed_counter = 0
+    labels = {}
+    for e in entities:
+        t = e['topic']
+        if t not in topic_seeds:
+            topic_seeds[t] = seed_counter
+            seed_counter += 1
+        labels[e['id']] = topic_seeds[t]
+
+    # Label propagation with weighted voting
+    for _ in range(50):
         changed = False
         order = ids[:]
         random.shuffle(order)
         for node in order:
-            nbrs = list(adj[node])
+            nbrs = adj[node]
             if not nbrs:
                 continue
-            nl = [labels[nb] for nb in nbrs]
-            best = max(set(nl), key=nl.count)
+            vote: Dict[int, float] = defaultdict(float)
+            for nb, w in nbrs.items():
+                vote[labels[nb]] += w
+            best = max(vote, key=vote.__getitem__)
             if labels[node] != best:
                 labels[node] = best
                 changed = True
         if not changed:
             break
+
     counts = Counter(labels.values())
     rank = {label: i for i, (label, _) in enumerate(counts.most_common())}
     return {node: rank[label] for node, label in labels.items()}
