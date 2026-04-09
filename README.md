@@ -25,6 +25,38 @@ Point it at any folder and it gives you:
 - **Tiered context packs** — compressed summaries optimized for AI consumption
 - **Dashboard** — one place to access everything
 
+## Best Way to Use It
+
+The best way to use Second Brain T is with **Claude Code**.
+
+When you run it inside Claude Code, Claude has instant access to your entire knowledge base — all the summaries, the graph report, and the deep context files. No uploading, no copy-pasting, no manual steps. Just ask questions and Claude reads from the KB automatically.
+
+```
+1. Open Claude Code
+
+2. Clone Second Brain T:
+   git clone https://github.com/itozija/second-brain-t
+
+3. Point it at your folder:
+   python3 second-brain-t/build.py /your/folder
+
+4. Ask Claude anything:
+   "What are the main themes in my research?"
+   "Which papers connect to each other?"
+   "Summarize everything I have on megaprojects"
+   "Write me study notes from this paper"
+```
+
+Claude reads from the compiled knowledge base — not your raw files. This means faster answers, less context wasted, and no hitting token limits.
+
+**Alternative — Claude.ai or any other AI**
+If you don't use Claude Code, you can still use Second Brain T with Claude.ai, ChatGPT, or any AI. After running the script, go to `output/tiers/` and upload the relevant file before asking your question:
+- `index.md` — for broad questions about everything
+- `topic/[topic].md` — for questions about a specific theme
+- `entity/[paper].md` — for deep questions about one file
+
+---
+
 ## Getting Started
 
 ### Step 1 — Install Python
