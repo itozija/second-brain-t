@@ -491,6 +491,57 @@ def extract_title(path: Path, text: str) -> str:
         stem = path.stem
     return stem.replace('-', ' ').replace('_', ' ').title()
 
+def extract_summary(text: str) -> str:
+    """Extract a 2-3 sentence summary from the abstract or opening of a document."""
+    # Try to find abstract section
+    abstract_match = re.search(
+        r'(?:abstract|summary|overview)[:\s\n]+(.+?)(?:\n\n|\n(?:keywords|introduction|1\.|background))',
+        text[:3000], re.IGNORECASE | re.DOTALL
+    )
+    if abstract_match:
+        raw = abstract_match.group(1).strip()
+        # Clean up PDF extraction artifacts (no spaces between words)
+        raw = re.sub(r'\s+', ' ', raw)
+        sentences = re.split(r'(?<=[.!?])\s+', raw)
+        good = [s.strip() for s in sentences if len(s.strip()) > 40 and re.search(r'[a-z]', s)]
+        if good:
+            return ' '.join(good[:3])
+
+    # Fall back: take first 3 meaningful sentences from body
+    body = re.sub(r'<!--.*?-->', '', text[:3000], flags=re.DOTALL)
+    body = re.sub(r'\s+', ' ', body).strip()
+    sentences = re.split(r'(?<=[.!?])\s+', body)
+    good = [s.strip() for s in sentences
+            if len(s.strip()) > 60
+            and re.search(r'[a-z]', s)
+            and not re.search(r'(journal|homepage|www\.|copyright|issn|doi:|page \d)', s, re.I)]
+    return ' '.join(good[:3]) if good else ''
+
+
+def extract_citation(path: Path, text: str) -> dict:
+    """Extract citation metadata: author, year, title."""
+    citation = {'title': '', 'authors': '', 'year': '', 'source': path.name}
+
+    # Year — look for 4-digit year between 1950-2030
+    year_match = re.search(r'\b(19[5-9]\d|20[0-2]\d)\b', text[:1000])
+    if year_match:
+        citation['year'] = year_match.group(1)
+
+    # Authors — look for patterns like "LastName, F." or "LastName et al."
+    author_match = re.search(
+        r'([A-Z][a-z]+(?:,\s+[A-Z]\.?)+(?:\s+and\s+[A-Z][a-z]+(?:,\s+[A-Z]\.?)*)*'
+        r'|[A-Z][a-z]+\s+et\s+al\.)',
+        text[:500]
+    )
+    if author_match:
+        citation['authors'] = author_match.group(0).strip()
+
+    # Title from label
+    citation['title'] = extract_title(path, text)
+
+    return citation
+
+
 def extract_keywords(text: str, top_n: int = 15) -> List[str]:
     words = re.sub(r'[^a-zA-Z\s]', ' ', text.lower()).split()
     freq = Counter(w for w in words if len(w) > 4 and w not in STOPWORDS)
@@ -521,6 +572,8 @@ def build_entities(files: List[Path], target: Path, cache: Cache) -> List[dict]:
             'text': clean,
             'keywords': extract_keywords(clean),
             'topic': infer_topic(f, clean),
+            'summary': extract_summary(clean),
+            'citation': extract_citation(f, clean),
             'ast_nodes': ast_nodes,
             'ast_edges': [[a, b] for a, b in ast_edges],
             'is_code': f.suffix in CODE_EXTS,
@@ -696,6 +749,8 @@ def build_tiers(entities: List[dict], edges: List[dict], out_dir: Path, title: s
             f'_File: `{e["file"]}` | Topic: {e["topic"]}_\n',
             f'_Keywords: {", ".join(e["keywords"][:8])}_\n',
         ]
+        if e.get('summary'):
+            lines += ['\n## Summary\n', e['summary'], '']
         if e.get('ast_nodes'):
             lines += ['\n## Code Structure\n'] + [f'- `{n}`' for n in e['ast_nodes'][:12]]
         lines += ['\n## Content\n', e['text'].strip()[:5000] + ('\n\n_[truncated]_' if len(e['text']) > 5000 else '')]
@@ -978,6 +1033,17 @@ def build_dashboard(entities: List[dict], edges: List[dict], out_dir: Path, titl
         f'<div class="card"><div style="width:10px;height:10px;border-radius:50%;background:{TOPIC_COLORS.get(t,"#888")};flex-shrink:0"></div>'
         f'<div><div class="ct">{t.replace("-"," ").title()}</div><div class="cs">{len(ents)} entities</div></div></div>'
         for t, ents in sorted(topics.items()))
+
+    # Build search index — id, label, topic, keywords, summary
+    search_data = json.dumps([{
+        'id': e['id'],
+        'label': e['label'],
+        'topic': e['topic'],
+        'keywords': ' '.join(e['keywords']),
+        'summary': e.get('summary', '')[:200],
+        'file': e['file'],
+    } for e in entities], ensure_ascii=False)
+
     html = f"""<!DOCTYPE html>
 <html lang="en">
 <head>
@@ -994,10 +1060,21 @@ body{{font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif;backgro
 .conf{{display:flex;gap:10px;justify-content:center;margin-bottom:24px;flex-wrap:wrap}}
 .badge{{padding:4px 12px;border-radius:10px;font-size:12px;font-weight:600}}
 .EX{{background:#1f6feb33;color:#58a6ff}}.IN{{background:#388bfd22;color:#79c0ff}}.AM{{background:#f0883e22;color:#f0883e}}
-.actions{{display:flex;gap:12px;justify-content:center;margin-bottom:40px;flex-wrap:wrap}}
+.actions{{display:flex;gap:12px;justify-content:center;margin-bottom:30px;flex-wrap:wrap}}
 .btn{{padding:10px 22px;border-radius:8px;font-size:14px;font-weight:600;text-decoration:none;transition:opacity .2s}}
 .bp{{background:#388bfd;color:#fff}}.bs{{background:#21262d;color:#e6edf3;border:1px solid #30363d}}
 .btn:hover{{opacity:.85}}
+.search-wrap{{max-width:600px;margin:0 auto 40px;padding:0 20px}}
+.search-box{{width:100%;padding:12px 18px;font-size:15px;background:#161b22;border:1px solid #30363d;border-radius:10px;color:#e6edf3;outline:none}}
+.search-box:focus{{border-color:#388bfd}}
+.search-box::placeholder{{color:#484f58}}
+#search-results{{margin-top:10px;display:none}}
+.sr{{background:#161b22;border:1px solid #30363d;border-radius:8px;padding:12px 16px;margin-bottom:6px}}
+.sr-title{{font-size:14px;font-weight:600;color:#e6edf3}}
+.sr-meta{{font-size:11px;color:#8b949e;margin-top:2px}}
+.sr-summary{{font-size:12px;color:#c9d1d9;margin-top:6px;line-height:1.5}}
+.sr-link{{font-size:11px;color:#388bfd;text-decoration:none;margin-top:4px;display:inline-block}}
+.no-results{{color:#8b949e;font-size:13px;text-align:center;padding:20px}}
 .sec{{max-width:860px;margin:0 auto;padding:0 40px 50px}}
 .sec h2{{font-size:15px;font-weight:600;margin-bottom:12px;color:#c9d1d9}}
 .cards{{display:grid;grid-template-columns:repeat(auto-fill,minmax(175px,1fr));gap:10px}}
@@ -1009,10 +1086,10 @@ footer{{text-align:center;padding:20px;font-size:11px;color:#484f58}}
 <body>
 <div class="hero">
   <h1>🧠 {title}</h1>
-  <p>Second Brain T v1.0 &nbsp;·&nbsp; Second Brain T v1.0</p>
+  <p>Second Brain T v1.0</p>
   <p style="color:#484f58;font-size:11px">{datetime.now().strftime('%Y-%m-%d %H:%M')}</p>
   <div class="stats">
-    <div class="stat"><div class="sn">{len(entities)}</div><div class="sl">Entities</div></div>
+    <div class="stat"><div class="sn">{len(entities)}</div><div class="sl">Documents</div></div>
     <div class="stat"><div class="sn">{len(edges)}</div><div class="sl">Connections</div></div>
     <div class="stat"><div class="sn">{len(topics)}</div><div class="sl">Topics</div></div>
     <div class="stat"><div class="sn">{stats.get("communities",0)}</div><div class="sl">Clusters</div></div>
@@ -1027,14 +1104,88 @@ footer{{text-align:center;padding:20px;font-size:11px;color:#484f58}}
     <a href="wiki/index.md" class="btn bs">📖 Obsidian Wiki</a>
     <a href="tiers/index.md" class="btn bs">📦 Context Tiers</a>
     <a href="graph/report.md" class="btn bs">📊 Report</a>
+    <a href="bibliography.md" class="btn bs">📚 Bibliography</a>
   </div>
 </div>
+
+<div class="search-wrap">
+  <input class="search-box" type="text" id="search" placeholder="Search papers, topics, keywords..." autocomplete="off">
+  <div id="search-results"></div>
+</div>
+
 <div class="sec"><h2>Topics</h2><div class="cards">{cards}</div></div>
-<footer>Second Brain T v1.0 &nbsp;·&nbsp; Second Brain T v1.0 &nbsp;·&nbsp; MIT</footer>
+<footer>Second Brain T v1.0 &nbsp;·&nbsp; MIT</footer>
+
+<script>
+const DATA = {search_data};
+const input = document.getElementById('search');
+const results = document.getElementById('search-results');
+
+input.addEventListener('input', () => {{
+  const q = input.value.trim().toLowerCase();
+  if (!q) {{ results.style.display = 'none'; results.innerHTML = ''; return; }}
+  const hits = DATA.filter(e =>
+    e.label.toLowerCase().includes(q) ||
+    e.topic.toLowerCase().includes(q) ||
+    e.keywords.toLowerCase().includes(q) ||
+    e.summary.toLowerCase().includes(q)
+  ).slice(0, 12);
+  results.style.display = 'block';
+  if (!hits.length) {{
+    results.innerHTML = '<div class="no-results">No results found</div>';
+    return;
+  }}
+  results.innerHTML = hits.map(e => `
+    <div class="sr">
+      <div class="sr-title">${{e.label}}</div>
+      <div class="sr-meta">${{e.topic}} &nbsp;·&nbsp; ${{e.keywords.split(' ').slice(0,4).join(', ')}}</div>
+      ${{e.summary ? `<div class="sr-summary">${{e.summary}}</div>` : ''}}
+      <a class="sr-link" href="tiers/entity/${{e.id}}.md">→ Deep context</a>
+    </div>`).join('');
+}});
+</script>
 </body>
 </html>"""
     (out_dir / 'index.html').write_text(html, encoding='utf-8')
     print(f'  Dashboard: index.html')
+
+
+# ── Citation export ───────────────────────────────────────────────────────────
+
+def build_citations(entities: List[dict], out_dir: Path, title: str):
+    """Generate a .bib file and a readable bibliography markdown."""
+    bib_lines = []
+    md_lines = [f'# {title} — Bibliography\n', f'_Generated: {datetime.now().strftime("%Y-%m-%d %H:%M")} | {len(entities)} sources_\n']
+
+    topics: Dict[str, list] = defaultdict(list)
+    for e in entities:
+        topics[e['topic']].append(e)
+
+    for topic, ents in sorted(topics.items()):
+        md_lines.append(f'\n## {topic.replace("-", " ").title()}\n')
+        for e in sorted(ents, key=lambda x: x['citation'].get('year', '0000'), reverse=True):
+            c = e['citation']
+            key = slugify(f'{c["authors"][:20] if c["authors"] else e["id"]}-{c["year"] or "nd"}')
+            title_bib = c['title'].replace('{', '').replace('}', '')
+            year = c['year'] or 'n.d.'
+            authors = c['authors'] or 'Unknown'
+
+            # BibTeX entry
+            bib_lines.append(f'@misc{{{key},')
+            bib_lines.append(f'  title = {{{title_bib}}},')
+            bib_lines.append(f'  author = {{{authors}}},')
+            bib_lines.append(f'  year = {{{year}}},')
+            bib_lines.append(f'  note = {{File: {e["file"]}}}')
+            bib_lines.append('}\n')
+
+            # Readable markdown entry
+            summary_line = f' — _{e["summary"][:150]}..._' if e.get('summary') else ''
+            md_lines.append(f'- **{c["title"][:100]}** ({authors}, {year}){summary_line}')
+
+    out_dir.mkdir(parents=True, exist_ok=True)
+    (out_dir / 'bibliography.bib').write_text('\n'.join(bib_lines), encoding='utf-8')
+    (out_dir / 'bibliography.md').write_text('\n'.join(md_lines), encoding='utf-8')
+    print(f'  Citations: bibliography.bib + bibliography.md')
 
 
 # ── Claude skill installer ─────────────────────────────────────────────────────
@@ -1139,6 +1290,7 @@ def main():
     build_wiki(entities, edges, OUT / 'wiki', title)
     stats = build_graph(entities, edges, OUT / 'graph', title, communities)
     stats['communities'] = n_comm
+    build_citations(entities, OUT, title)
     build_dashboard(entities, edges, OUT, title, stats)
     install_skill(target)
 
