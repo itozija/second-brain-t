@@ -984,134 +984,332 @@ def build_graph(entities: List[dict], edges: List[dict], graph_dir: Path,
     (graph_dir / 'report.md').write_text('\n'.join(r for r in report if r is not None), encoding='utf-8')
     print(f'  Report: graph/report.md')
 
-    # HTML
+    # Only show strong edges to avoid hairball effect
+    strong_edges = [e for e in edges if e['weight'] >= 7]
+    if len(strong_edges) < 10:
+        strong_edges = sorted(edges, key=lambda x: -x['weight'])[:max(len(nodes)*2, 20)]
+
     topics_list = sorted(set(n['topic'] for n in nodes))
-    vis_nodes = json.dumps([{
-        'id': n['id'], 'label': n['label'][:28],
-        'title': (f"<b>{n['label']}</b><br>Topic: {n['topic']}<br>File: {n['file']}<br>"
-                  f"Connections: {n['degree']}<br>Cluster: {n['community']}<br>"
-                  f"Keywords: {', '.join(n['keywords'][:5])}"),
-        'color': {'background': n['color'], 'border': '#ffffff33',
-                  'highlight': {'background': n['color'], 'border': '#fff'}},
-        'size': n['size'], 'font': {'color': '#fff', 'size': 12},
-        'topic': n['topic'], 'community': n['community'], 'is_code': n['is_code'],
+
+    # Node data enriched
+    node_data = json.dumps([{
+        'id': n['id'],
+        'label': n['label'],
+        'topic': n['topic'],
+        'color': n['color'],
+        'degree': n['degree'],
+        'community': n['community'],
+        'keywords': n['keywords'],
+        'file': n['file'],
+        'summary': next((e.get('summary','') for e in entities if e['id']==n['id']), ''),
     } for n in nodes])
-    vis_edges = json.dumps([{
+
+    edge_data = json.dumps([{
         'from': e['from'], 'to': e['to'],
-        'width': min(1 + e['weight'] / 5, 5),
-        'title': f"{e['type']}: {', '.join(e['shared_keywords'][:3]) or e['relation']}",
-        'color': {'color': '#388bfd' if e['type'] == 'EXTRACTED' else ('#8b949e' if e['type'] == 'INFERRED' else '#484f58'),
-                  'highlight': '#e6edf3'},
-        'dashes': e['type'] == 'AMBIGUOUS',
-    } for e in edges])
-    topic_filters = '\n'.join(
-        f'<label><input type="checkbox" class="ft" value="{t}" checked>'
-        f'<span style="color:{TOPIC_COLORS.get(t,"#888")}">■</span> {t.replace("-"," ").title()}</label>'
-        for t in topics_list)
-    comm_filters = '\n'.join(
-        f'<label><input type="checkbox" class="fc" value="{i}" checked> Cluster {i}</label>'
-        for i in range(n_comm))
+        'weight': e['weight'], 'type': e['type'],
+        'shared': e['shared_keywords'][:3],
+    } for e in strong_edges])
+
+    topic_legend = json.dumps({t: TOPIC_COLORS.get(t, '#BDC3C7') for t in topics_list})
 
     html = f"""<!DOCTYPE html>
 <html lang="en">
 <head>
-<meta charset="UTF-8"><title>{title} — Graph</title>
+<meta charset="UTF-8"><title>{title} — Knowledge Graph</title>
 <script src="https://unpkg.com/vis-network/standalone/umd/vis-network.min.js"></script>
 <style>
 *{{box-sizing:border-box;margin:0;padding:0}}
-body{{font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif;background:#0d1117;color:#e6edf3;height:100vh;display:flex;flex-direction:column}}
-#hdr{{padding:12px 20px;background:#161b22;border-bottom:1px solid #30363d;display:flex;align-items:center;justify-content:space-between;flex-shrink:0}}
-#hdr h1{{font-size:16px;font-weight:600}}
-.st{{font-size:12px;color:#8b949e;display:flex;gap:14px;align-items:center}}
-.badge{{padding:2px 8px;border-radius:10px;font-size:11px;font-weight:600}}
-.EX{{background:#1f6feb33;color:#58a6ff}}.IN{{background:#388bfd22;color:#79c0ff}}.AM{{background:#f0883e22;color:#f0883e}}
-#body{{display:flex;flex:1;overflow:hidden}}
-#sb{{width:210px;background:#161b22;border-right:1px solid #30363d;overflow-y:auto;padding:12px;flex-shrink:0;font-size:12px}}
-#sb h4{{font-size:10px;text-transform:uppercase;letter-spacing:.08em;color:#8b949e;margin:10px 0 5px}}
-#sb label{{display:flex;align-items:center;gap:6px;margin-bottom:4px;cursor:pointer;color:#c9d1d9}}
-#search{{width:100%;padding:6px 9px;background:#0d1117;border:1px solid #30363d;border-radius:6px;color:#e6edf3;font-size:12px;margin-bottom:6px}}
-#search:focus{{outline:none;border-color:#388bfd}}
-#graph{{flex:1}}
-#info{{width:240px;background:#161b22;border-left:1px solid #30363d;padding:14px;overflow-y:auto;flex-shrink:0;font-size:12px;display:none}}
-#info h3{{font-size:14px;font-weight:600;color:#fff;margin-bottom:6px;word-break:break-word}}
-.meta{{color:#8b949e;line-height:1.7;margin-bottom:8px}}
-.kws span{{display:inline-block;background:#21262d;padding:2px 7px;border-radius:10px;font-size:10px;margin:2px;color:#c9d1d9}}
-.btn{{display:inline-block;padding:5px 12px;border-radius:6px;font-size:11px;border:1px solid #30363d;background:#21262d;color:#c9d1d9;text-decoration:none;margin:3px 0}}
-.btn:hover{{background:#30363d}}
+html,body{{height:100%;font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif;background:#0d1117;color:#e6edf3;overflow:hidden}}
+
+/* Header */
+#hdr{{height:52px;background:#161b22;border-bottom:1px solid #30363d;display:flex;align-items:center;padding:0 20px;gap:16px;flex-shrink:0}}
+#hdr-title{{font-size:15px;font-weight:700;display:flex;align-items:center;gap:8px}}
+#search-wrap{{flex:1;max-width:320px;position:relative}}
+#search{{width:100%;padding:7px 14px 7px 34px;background:#21262d;border:1px solid #30363d;border-radius:20px;color:#e6edf3;font-size:13px;outline:none}}
+#search:focus{{border-color:#388bfd}}
+#search-wrap::before{{content:'🔍';position:absolute;left:10px;top:50%;transform:translateY(-50%);font-size:13px;pointer-events:none}}
+.stat-pill{{background:#21262d;border:1px solid #30363d;border-radius:20px;padding:4px 12px;font-size:11px;color:#8b949e;white-space:nowrap}}
+#btn-fit{{padding:6px 14px;background:#388bfd;color:#fff;border:none;border-radius:6px;font-size:12px;font-weight:600;cursor:pointer;margin-left:auto}}
+#btn-fit:hover{{background:#1f6feb}}
+
+/* Layout */
+#layout{{display:flex;height:calc(100vh - 52px)}}
+
+/* Sidebar */
+#sb{{width:200px;background:#161b22;border-right:1px solid #30363d;display:flex;flex-direction:column;flex-shrink:0;overflow:hidden}}
+#sb-tabs{{display:flex;border-bottom:1px solid #30363d}}
+.tab{{flex:1;padding:10px;text-align:center;font-size:11px;font-weight:600;color:#8b949e;cursor:pointer;border-bottom:2px solid transparent}}
+.tab.active{{color:#e6edf3;border-bottom-color:#388bfd}}
+#sb-content{{flex:1;overflow-y:auto;padding:12px}}
+.topic-item{{display:flex;align-items:center;gap:8px;padding:6px 8px;border-radius:6px;cursor:pointer;margin-bottom:2px;transition:background .15s}}
+.topic-item:hover{{background:#21262d}}
+.topic-item.active{{background:#21262d}}
+.topic-dot{{width:10px;height:10px;border-radius:50%;flex-shrink:0}}
+.topic-name{{font-size:12px;color:#c9d1d9;flex:1}}
+.topic-count{{font-size:10px;color:#8b949e;background:#0d1117;padding:1px 6px;border-radius:8px}}
+.nav-link{{display:flex;align-items:center;gap:8px;padding:8px 10px;border-radius:6px;color:#c9d1d9;text-decoration:none;font-size:12px;margin-bottom:2px;transition:background .15s}}
+.nav-link:hover{{background:#21262d}}
+#sb-section{{font-size:10px;text-transform:uppercase;letter-spacing:.08em;color:#484f58;margin:12px 0 6px;font-weight:600}}
+
+/* Graph */
+#graph{{flex:1;position:relative}}
+#graph-canvas{{width:100%;height:100%}}
+#loading{{position:absolute;inset:0;display:flex;align-items:center;justify-content:center;background:#0d1117;font-size:14px;color:#8b949e;flex-direction:column;gap:12px}}
+.spinner{{width:32px;height:32px;border:3px solid #30363d;border-top-color:#388bfd;border-radius:50%;animation:spin .8s linear infinite}}
+@keyframes spin{{to{{transform:rotate(360deg)}}}}
+
+/* Detail panel */
+#detail{{width:280px;background:#161b22;border-left:1px solid #30363d;display:flex;flex-direction:column;flex-shrink:0;transform:translateX(100%);transition:transform .2s;position:absolute;right:0;top:0;height:100%}}
+#detail.open{{transform:translateX(0);position:relative}}
+#detail-close{{position:absolute;top:12px;right:12px;background:none;border:none;color:#8b949e;font-size:18px;cursor:pointer;line-height:1}}
+#detail-close:hover{{color:#e6edf3}}
+#detail-inner{{padding:20px;overflow-y:auto;flex:1}}
+#d-topic{{display:inline-block;padding:3px 10px;border-radius:10px;font-size:11px;font-weight:600;margin-bottom:10px}}
+#d-title{{font-size:14px;font-weight:700;color:#fff;line-height:1.4;margin-bottom:8px}}
+#d-summary{{font-size:12px;color:#8b949e;line-height:1.6;margin-bottom:12px;font-style:italic}}
+#d-stats{{display:flex;gap:8px;margin-bottom:14px}}
+.d-stat{{background:#21262d;border-radius:6px;padding:6px 10px;text-align:center;flex:1}}
+.d-stat-n{{font-size:18px;font-weight:700;color:#388bfd}}
+.d-stat-l{{font-size:10px;color:#8b949e;margin-top:2px}}
+#d-kws{{display:flex;flex-wrap:wrap;gap:4px;margin-bottom:14px}}
+.kw-tag{{background:#21262d;border:1px solid #30363d;padding:3px 9px;border-radius:10px;font-size:11px;color:#c9d1d9}}
+#d-connections{{margin-bottom:14px}}
+#d-connections h4{{font-size:11px;text-transform:uppercase;letter-spacing:.06em;color:#484f58;margin-bottom:8px}}
+.conn-item{{padding:7px 0;border-bottom:1px solid #21262d;font-size:12px}}
+.conn-label{{color:#c9d1d9;font-weight:500}}
+.conn-meta{{color:#8b949e;font-size:10px;margin-top:2px}}
+#d-actions{{display:flex;flex-direction:column;gap:6px}}
+.d-btn{{padding:9px 14px;border-radius:7px;font-size:12px;font-weight:600;text-decoration:none;text-align:center;border:1px solid #30363d;background:#21262d;color:#c9d1d9;cursor:pointer;transition:background .15s}}
+.d-btn:hover{{background:#30363d}}
+.d-btn.primary{{background:#388bfd;color:#fff;border-color:#388bfd}}
+.d-btn.primary:hover{{background:#1f6feb}}
 </style>
 </head>
 <body>
+
 <div id="hdr">
-  <h1>🧠 {title}</h1>
-  <div class="st">
-    <span>{len(nodes)} nodes &nbsp;·&nbsp; {len(edges)} connections &nbsp;·&nbsp; {n_comm} clusters</span>
-    <span class="badge EX">AST: {stats['extracted']}</span>
-    <span class="badge IN">Inferred: {stats['inferred']}</span>
-    <span class="badge AM">Ambiguous: {stats['ambiguous']}</span>
+  <div id="hdr-title">🧠 {title}</div>
+  <div id="search-wrap">
+    <input id="search" type="text" placeholder="Search papers...">
   </div>
+  <span class="stat-pill">{len(nodes)} papers</span>
+  <span class="stat-pill">{len(strong_edges)} connections</span>
+  <span class="stat-pill">{n_comm} clusters</span>
+  <button id="btn-fit" onclick="net.fit({{animation:true}})">⊙ Fit</button>
 </div>
-<div id="body">
+
+<div id="layout">
   <div id="sb">
-    <input type="text" id="search" placeholder="Search nodes...">
-    <h4>Topics</h4>{topic_filters}
-    <h4>Clusters</h4>{comm_filters}
-    <h4>Navigate</h4>
-    <a href="../index.html" class="btn">🏠 Dashboard</a>
-    <a href="report.md" class="btn">📊 Report</a>
-    <a href="../wiki/index.md" class="btn">📖 Wiki</a>
-    <a href="../tiers/index.md" class="btn">📦 Tiers</a>
+    <div id="sb-tabs">
+      <div class="tab active" onclick="switchTab(0)">Topics</div>
+      <div class="tab" onclick="switchTab(1)">Navigate</div>
+    </div>
+    <div id="sb-content">
+      <div id="tab-topics"></div>
+      <div id="tab-nav" style="display:none">
+        <div id="sb-section">Views</div>
+        <a class="nav-link" href="../index.html">🏠 Dashboard</a>
+        <a class="nav-link" href="report.md">📊 Graph Report</a>
+        <div id="sb-section">Study</div>
+        <a class="nav-link" href="../wiki/index.md">📖 Obsidian Wiki</a>
+        <a class="nav-link" href="../tiers/index.md">📦 Context Tiers</a>
+        <a class="nav-link" href="../bibliography.md">📚 Bibliography</a>
+        <a class="nav-link" href="../reading-order.md">📋 Reading List</a>
+        <a class="nav-link" href="../insights.md">🔍 Insights</a>
+      </div>
+    </div>
   </div>
-  <div id="graph"></div>
-  <div id="info">
-    <h3 id="i-title"></h3>
-    <div class="meta" id="i-meta"></div>
-    <div class="kws" id="i-kws"></div>
-    <div id="i-links"></div>
+
+  <div id="graph">
+    <div id="loading"><div class="spinner"></div><span>Building graph...</span></div>
+    <div id="graph-canvas"></div>
+  </div>
+
+  <div id="detail">
+    <button id="detail-close" onclick="closeDetail()">✕</button>
+    <div id="detail-inner">
+      <div id="d-topic"></div>
+      <div id="d-title"></div>
+      <div id="d-summary"></div>
+      <div id="d-stats">
+        <div class="d-stat"><div class="d-stat-n" id="d-conn-n">0</div><div class="d-stat-l">Connections</div></div>
+        <div class="d-stat"><div class="d-stat-n" id="d-clust-n">0</div><div class="d-stat-l">Cluster</div></div>
+      </div>
+      <div id="d-kws"></div>
+      <div id="d-connections"><h4>Connected to</h4><div id="d-conn-list"></div></div>
+      <div id="d-actions">
+        <a id="d-wiki" class="d-btn primary" href="#">📖 Open Wiki page</a>
+        <a id="d-tier" class="d-btn" href="#">📦 Deep context</a>
+      </div>
+    </div>
   </div>
 </div>
+
 <script>
-const ND={vis_nodes};
-const ED={vis_edges};
-const nodes=new vis.DataSet(ND);
-const edges=new vis.DataSet(ED);
-const net=new vis.Network(document.getElementById('graph'),{{nodes,edges}},{{
-  physics:{{stabilization:{{iterations:200}},barnesHut:{{gravitationalConstant:-4500,springLength:140,springConstant:0.03}}}},
-  interaction:{{hover:true,tooltipDelay:300}},
-  nodes:{{shape:'dot',borderWidth:1.5}},
-  edges:{{smooth:{{type:'continuous'}}}},
+const NODES = {node_data};
+const EDGES = {edge_data};
+const TOPIC_COLORS = {topic_legend};
+const nodeMap = {{}};
+NODES.forEach(n => nodeMap[n.id] = n);
+
+// Build edge map for connections panel
+const edgeMap = {{}};
+EDGES.forEach(e => {{
+  if (!edgeMap[e.from]) edgeMap[e.from] = [];
+  if (!edgeMap[e.to])   edgeMap[e.to]   = [];
+  edgeMap[e.from].push({{peer: e.to,   shared: e.shared, type: e.type}});
+  edgeMap[e.to].push(  {{peer: e.from, shared: e.shared, type: e.type}});
 }});
-net.on('click',p=>{{
-  if(!p.nodes.length){{document.getElementById('info').style.display='none';return;}}
-  const id=p.nodes[0];
-  const n=ND.find(x=>x.id===id);
-  document.getElementById('info').style.display='block';
-  document.getElementById('i-title').textContent=n.label;
-  const m=n.title;
-  document.getElementById('i-meta').innerHTML=
-    `Topic: <b>${{n.topic}}</b><br>`+
-    `File: <code style="font-size:10px">${{m.match(/File: ([^<]+)/)?.[1]||''}}</code><br>`+
-    `Connections: <b>${{m.match(/Connections: ([^<]+)/)?.[1]||''}}</b> &nbsp; Cluster: ${{n.community}}`;
-  const kws=(m.split('Keywords: ')[1]||'').split('<')[0];
-  document.getElementById('i-kws').innerHTML=kws.split(', ').map(k=>`<span>${{k}}</span>`).join('');
-  document.getElementById('i-links').innerHTML=
-    `<a href="../wiki/${{n.topic}}/${{id}}.md" class="btn">📖 Wiki page</a>`+
-    `<a href="../tiers/entity/${{id}}.md" class="btn">📦 Deep context</a>`;
+
+// Build topic list
+const topicCounts = {{}};
+NODES.forEach(n => topicCounts[n.topic] = (topicCounts[n.topic]||0)+1);
+let activeTopic = null;
+const topicEl = document.getElementById('tab-topics');
+Object.entries(topicCounts).sort((a,b)=>b[1]-a[1]).forEach(([t,c]) => {{
+  const col = TOPIC_COLORS[t] || '#888';
+  const el = document.createElement('div');
+  el.className = 'topic-item'; el.dataset.topic = t;
+  el.innerHTML = `<div class="topic-dot" style="background:${{col}}"></div>
+    <span class="topic-name">${{t.replace(/-/g,' ')}}</span>
+    <span class="topic-count">${{c}}</span>`;
+  el.onclick = () => filterByTopic(t, el);
+  topicEl.appendChild(el);
 }});
-document.getElementById('search').addEventListener('input',function(){{
-  const q=this.value.toLowerCase();
-  nodes.forEach(n=>nodes.update({{id:n.id,hidden:!!q&&!n.label.toLowerCase().includes(q)}}));
+
+// vis.js datasets
+const maxDeg = Math.max(...NODES.map(n=>n.degree), 1);
+const visNodes = new vis.DataSet(NODES.map(n => ({{
+  id: n.id,
+  label: n.label.length > 22 ? n.label.slice(0,22)+'…' : n.label,
+  color: {{
+    background: n.color,
+    border: n.color,
+    highlight: {{background: '#fff', border: n.color}},
+    hover: {{background: n.color, border: '#fff'}},
+  }},
+  size: 10 + (n.degree / maxDeg) * 30,
+  font: {{color:'#e6edf3', size: 11, face:'system-ui'}},
+  topic: n.topic,
+  borderWidth: 2,
+  shadow: {{enabled:true, color:'rgba(0,0,0,0.4)', size:6}},
+}})));
+
+const visEdges = new vis.DataSet(EDGES.map(e => ({{
+  from: e.from, to: e.to,
+  width: e.type === 'EXTRACTED' ? 2.5 : 1,
+  color: {{
+    color: e.type === 'EXTRACTED' ? '#388bfd44' : '#30363d',
+    highlight: '#388bfd',
+    hover: '#58a6ff',
+  }},
+  smooth: {{type:'curvedCW', roundness:0.1}},
+  dashes: e.type === 'AMBIGUOUS',
+}})));
+
+const net = new vis.Network(
+  document.getElementById('graph-canvas'),
+  {{nodes: visNodes, edges: visEdges}},
+  {{
+    physics: {{
+      stabilization: {{iterations:150, fit:true}},
+      barnesHut: {{
+        gravitationalConstant: -6000,
+        centralGravity: 0.3,
+        springLength: 160,
+        springConstant: 0.04,
+        damping: 0.12,
+      }},
+    }},
+    interaction: {{hover:true, tooltipDelay:200, hideEdgesOnDrag:true}},
+    nodes: {{shape:'dot'}},
+    edges: {{selectionWidth:3}},
+  }}
+);
+
+net.once('stabilizationIterationsDone', () => {{
+  document.getElementById('loading').style.display = 'none';
+  net.fit({{animation:{{duration:600, easingFunction:'easeInOutQuad'}}}});
 }});
-function applyFilters(){{
-  const at=[...document.querySelectorAll('.ft:checked')].map(c=>c.value);
-  const ac=[...document.querySelectorAll('.fc:checked')].map(c=>+c.value);
-  nodes.forEach(n=>nodes.update({{id:n.id,hidden:!at.includes(n.topic)||!ac.includes(n.community)}}));
+
+// Click handler
+net.on('click', p => {{
+  if (!p.nodes.length) {{ closeDetail(); return; }}
+  openDetail(p.nodes[0]);
+}});
+
+function openDetail(id) {{
+  const n = nodeMap[id];
+  if (!n) return;
+  const col = TOPIC_COLORS[n.topic] || '#888';
+  document.getElementById('d-topic').textContent = n.topic.replace(/-/g,' ');
+  document.getElementById('d-topic').style.background = col + '33';
+  document.getElementById('d-topic').style.color = col;
+  document.getElementById('d-title').textContent = n.label;
+  document.getElementById('d-summary').textContent = n.summary || '';
+  document.getElementById('d-conn-n').textContent = n.degree;
+  document.getElementById('d-clust-n').textContent = n.community;
+  document.getElementById('d-kws').innerHTML = (n.keywords||[]).map(k=>`<span class="kw-tag">${{k}}</span>`).join('');
+  const conns = (edgeMap[id]||[]).slice(0,6);
+  document.getElementById('d-conn-list').innerHTML = conns.map(c => {{
+    const peer = nodeMap[c.peer];
+    if (!peer) return '';
+    return `<div class="conn-item">
+      <div class="conn-label">${{peer.label.slice(0,50)}}</div>
+      <div class="conn-meta">${{c.shared.join(', ') || c.type}}</div>
+    </div>`;
+  }}).join('');
+  document.getElementById('d-wiki').href = `../wiki/${{n.topic}}/${{id}}.md`;
+  document.getElementById('d-tier').href = `../tiers/entity/${{id}}.md`;
+  document.getElementById('detail').classList.add('open');
 }}
-document.querySelectorAll('.ft,.fc').forEach(cb=>cb.addEventListener('change',applyFilters));
+
+function closeDetail() {{
+  document.getElementById('detail').classList.remove('open');
+}}
+
+// Search
+document.getElementById('search').addEventListener('input', function() {{
+  const q = this.value.toLowerCase().trim();
+  visNodes.forEach(n => {{
+    const node = nodeMap[n.id];
+    const match = !q || node.label.toLowerCase().includes(q) ||
+                  (node.keywords||[]).some(k=>k.includes(q)) ||
+                  node.topic.includes(q);
+    visNodes.update({{id:n.id, opacity: match ? 1 : 0.1,
+                     font: {{color: match ? '#e6edf3' : '#333'}}}});
+  }});
+}});
+
+// Topic filter
+function filterByTopic(topic, el) {{
+  if (activeTopic === topic) {{
+    activeTopic = null;
+    document.querySelectorAll('.topic-item').forEach(e=>e.classList.remove('active'));
+    visNodes.forEach(n=>visNodes.update({{id:n.id,opacity:1,font:{{color:'#e6edf3'}}}}));
+  }} else {{
+    activeTopic = topic;
+    document.querySelectorAll('.topic-item').forEach(e=>e.classList.remove('active'));
+    el.classList.add('active');
+    visNodes.forEach(n=>{{
+      const match = nodeMap[n.id].topic === topic;
+      visNodes.update({{id:n.id, opacity:match?1:0.08, font:{{color:match?'#e6edf3':'#333'}}}});
+    }});
+  }}
+}}
+
+// Tab switch
+const tabs = document.querySelectorAll('.tab');
+function switchTab(i) {{
+  tabs.forEach((t,j)=>t.classList.toggle('active',i===j));
+  document.getElementById('tab-topics').style.display = i===0?'':'none';
+  document.getElementById('tab-nav').style.display    = i===1?'':'none';
+}}
 </script>
 </body>
 </html>"""
     (graph_dir / 'graph.html').write_text(html, encoding='utf-8')
-    print(f'  Graph: graph/graph.html ({len(nodes)} nodes, {len(edges)} edges, {n_comm} clusters)')
+    print(f'  Graph: graph/graph.html ({len(nodes)} nodes, {len(strong_edges)} edges, {n_comm} clusters)')
     return stats
 
 
