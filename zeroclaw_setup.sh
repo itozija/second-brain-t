@@ -28,7 +28,8 @@ fi
 # 2. Install Python dependencies
 echo ""
 echo "[ 2/4 ] Installing Python dependencies..."
-pip3 install pdfplumber python-docx python-pptx --quiet
+pip3 install pdfplumber python-docx python-pptx --quiet --break-system-packages 2>/dev/null \
+    || pip3 install pdfplumber python-docx python-pptx --quiet
 echo "  Done"
 
 # 3. Create knowledge folder
