@@ -8,6 +8,6 @@ fi
 
 echo "Installing Second Brain T dependencies..."
 
-pip3 install pdfplumber python-docx python-pptx --quiet
+pip3 install pdfplumber python-docx python-pptx python-telegram-bot --quiet
 
 echo "Dependencies installed."
